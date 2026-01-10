@@ -1,0 +1,24 @@
+# Iceberg CLD BCDR Demo - Python Dependencies
+
+# Snowflake connector
+snowflake-connector-python>=3.6.0
+
+# AWS SDK
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Data generation
+faker>=22.0.0
+pandas>=2.1.0
+pyarrow>=14.0.0
+
+# Iceberg support
+pyiceberg>=0.6.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# CLI utilities
+click>=8.1.0
+rich>=13.7.0
+
