@@ -26,17 +26,28 @@
  ******************************************************************************/
 
 -- ============================================================================
--- CONFIGURATION VARIABLES
--- Update these values for your environment
+-- CONFIGURATION
 -- ============================================================================
+/*
+ * BEFORE RUNNING: Replace these placeholders with your actual values
+ *
+ * SECONDARY_ACCOUNT_FQN = '<YOUR_ORG>.<YOUR_SECONDARY_ACCOUNT>'
+ *
+ * Example: sfsenorthamerica.ozc55031
+ *
+ * Find your account identifiers:
+ *   - Run: SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();
+ *   - Or check: SHOW ORGANIZATION ACCOUNTS;
+ *
+ * NOTE: SQL variables ($var) cannot be used in DDL statements like 
+ *       CREATE FAILOVER GROUP. You must use literal account names.
+ */
 
-SET org_name = '<YOUR_ORG_NAME>';                       -- Your Snowflake organization name
-SET primary_account = '<YOUR_PRIMARY_ACCOUNT>';         -- Primary account locator
-SET secondary_account = '<YOUR_SECONDARY_ACCOUNT>';     -- Secondary account locator
-
--- Fully qualified account names
-SET primary_fqn = $org_name || '.' || $primary_account;
-SET secondary_fqn = $org_name || '.' || $secondary_account;
+-- Reference values (for verification only, cannot be used in DDL)
+-- Use ACCOUNT NAME, not account locator!
+SET org_name = 'SFSENORTHAMERICA';
+SET primary_account_name = 'SNOW_BCDR_PRIMARY';      -- Primary account NAME (this account)
+SET secondary_account_name = 'SNOW_BCDR_SECONDARY';  -- Secondary account NAME
 
 -- ============================================================================
 -- SECTION 1: Verify Organization Setup
@@ -77,23 +88,30 @@ SHOW DATABASES LIKE 'ICEBERG_DEMO%';
 /*
  * Account Object Failover Group includes:
  * - Roles and role grants
- * - Integrations (storage, catalog)
+ * - Storage Integrations (for S3 access)
  * - Warehouses (optional)
  * - Network policies (optional)
  * - Resource monitors (optional)
  *
- * For Iceberg BCDR, we replicate integrations so secondary can
- * access the same Glue catalog and S3 storage.
- *
- * NOTE: Even though we replicate the REST_GLUE_CATALOG_INT, the secondary
- * account still needs to create its own CLD using this integration.
+ * ╔═══════════════════════════════════════════════════════════════════════════╗
+ * ║  NOTE: CATALOG INTEGRATIONS CANNOT BE REPLICATED!                         ║
+ * ║                                                                           ║
+ * ║  Like CLDs, catalog integrations must be created independently on each   ║
+ * ║  account. See script 30 for secondary account setup.                     ║
+ * ╚═══════════════════════════════════════════════════════════════════════════╝
  */
 
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and secondary ACCOUNT NAME (not locator!)           │
+-- │  Format: <ORG_NAME>.<ACCOUNT_NAME>                                          │
+-- │  Find with: SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();    │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG
     OBJECT_TYPES = ROLES, INTEGRATIONS
-    ALLOWED_ACCOUNTS = $secondary_fqn
+    ALLOWED_INTEGRATION_TYPES = STORAGE INTEGRATIONS
+    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
     REPLICATION_SCHEDULE = '10 MINUTE'
-    COMMENT = 'Failover group for Iceberg BCDR - Account objects (roles, integrations)';
+    COMMENT = 'Failover group for Iceberg BCDR - Account objects (roles, storage integrations)';
 
 -- Verify failover group creation
 SHOW FAILOVER GROUPS;
@@ -110,9 +128,12 @@ DESCRIBE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG;
  * This ensures secondary has access to the same S3 locations.
  */
 
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and secondary ACCOUNT NAME (not locator!)           │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG
     OBJECT_TYPES = EXTERNAL VOLUMES
-    ALLOWED_ACCOUNTS = $secondary_fqn
+    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
     REPLICATION_SCHEDULE = '10 MINUTE'
     COMMENT = 'Failover group for Iceberg BCDR - External Volumes';
 
@@ -140,10 +161,13 @@ DESCRIBE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
  */
 
 -- Only replicate the External Tables database, NOT the CLD
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and secondary ACCOUNT NAME (not locator!)           │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_DB_FG
     OBJECT_TYPES = DATABASES
     ALLOWED_DATABASES = ICEBERG_DEMO_EXT
-    ALLOWED_ACCOUNTS = $secondary_fqn
+    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
     REPLICATION_SCHEDULE = '10 MINUTE'
     COMMENT = 'Failover group for Iceberg BCDR - External Tables database only (CLD not supported)';
 
@@ -184,20 +208,19 @@ ALTER FAILOVER GROUP ICEBERG_BCDR_DB_FG REFRESH;
 -- SECTION 8: Monitor Replication Status
 -- ============================================================================
 
--- Check replication progress for account objects
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_ACCOUNT_FG'));
+-- Check failover group status
+SHOW FAILOVER GROUPS;
 
--- Check replication progress for external volumes
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_VOLUME_FG'));
+-- Describe each failover group for detailed info
+DESCRIBE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG;
+DESCRIBE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
+DESCRIBE FAILOVER GROUP ICEBERG_BCDR_DB_FG;
 
--- Check replication progress for databases
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_DB_FG'));
-
--- View replication history
+-- Check replication history from Account Usage (may have ~2hr latency)
 SELECT *
-FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY())
+FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_GROUP_REFRESH_HISTORY
 WHERE REPLICATION_GROUP_NAME LIKE 'ICEBERG_BCDR%'
-ORDER BY PHASE_START_TIME DESC
+ORDER BY START_TIME DESC
 LIMIT 20;
 
 -- ============================================================================
@@ -214,28 +237,19 @@ SHOW EXTERNAL VOLUMES IN FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
 -- SECTION 10: Failover Group Status Queries
 -- ============================================================================
 
--- Overall status of all failover groups
-SELECT 
-    REPLICATION_GROUP_NAME,
-    CREATED_ON,
-    ACCOUNT_NAME,
-    IS_PRIMARY,
-    OBJECT_TYPES,
-    REPLICATION_ALLOWED_TO_ACCOUNTS
-FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUPS())
-WHERE REPLICATION_GROUP_NAME LIKE 'ICEBERG_BCDR%';
+-- Overall status of all failover groups (simple approach)
+SHOW FAILOVER GROUPS;
 
--- Lag monitoring - time since last successful sync
+-- Detailed status with last refresh time (Account Usage - may have latency)
 SELECT 
     REPLICATION_GROUP_NAME,
-    PHASE,
-    PHASE_START_TIME,
-    PHASE_END_TIME,
-    DATEDIFF('second', PHASE_START_TIME, COALESCE(PHASE_END_TIME, CURRENT_TIMESTAMP())) AS PHASE_DURATION_SECONDS
-FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY())
+    START_TIME,
+    END_TIME,
+    CREDITS_USED,
+    BYTES_TRANSFERRED
+FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_GROUP_REFRESH_HISTORY
 WHERE REPLICATION_GROUP_NAME LIKE 'ICEBERG_BCDR%'
-    AND PHASE = 'COMPLETED'
-ORDER BY PHASE_END_TIME DESC
+ORDER BY START_TIME DESC
 LIMIT 10;
 
 /*******************************************************************************
@@ -245,24 +259,29 @@ LIMIT 10;
  *
  * 1. ICEBERG_BCDR_ACCOUNT_FG
  *    - Roles: ICEBERG_ADMIN, ICEBERG_ENGINEER, ICEBERG_ANALYST
- *    - Integrations: AWS_ICEBERG_STORAGE_INT, REST_GLUE_CATALOG_INT
+ *    - Storage Integrations: AWS_ICEBERG_STORAGE_INT
+ *    - NOTE: Catalog integrations CANNOT be replicated!
  *
  * 2. ICEBERG_BCDR_VOLUME_FG
  *    - External Volumes: ICEBERG_EXT_VOLUME
  *
  * 3. ICEBERG_BCDR_DB_FG
  *    - Databases: ICEBERG_DEMO_EXT (External Tables only)
- *    - NOTE: ICEBERG_DEMO_CLD is NOT included (CLDs cannot be replicated)
+ *    - NOTE: ICEBERG_DEMO_CLD CANNOT be replicated
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │  CLD REPLICATION STRATEGY:                                              │
+ * │  WHAT CANNOT BE REPLICATED (must create on each account):              │
  * │                                                                         │
- * │  Since CLDs cannot be in failover groups, each account creates its     │
- * │  own CLD that points to the SAME Glue catalog:                         │
+ * │  ✗ Catalog Integrations (REST_GLUE_CATALOG_INT)                        │
+ * │  ✗ Catalog Linked Databases (ICEBERG_DEMO_CLD)                         │
+ * │                                                                         │
+ * │  Both accounts must create their own catalog integration and CLD       │
+ * │  that point to the SAME Glue catalog. See script 30.                   │
  * │                                                                         │
  * │  PRIMARY ACCOUNT              SECONDARY ACCOUNT                        │
  * │  ┌──────────────────┐        ┌──────────────────┐                     │
  * │  │ ICEBERG_DEMO_CLD │        │ ICEBERG_DEMO_CLD │                     │
+ * │  │ REST_GLUE_CAT_INT│        │ REST_GLUE_CAT_INT│                     │
  * │  └────────┬─────────┘        └────────┬─────────┘                     │
  * │           │                           │                                │
  * │           └───────────┬───────────────┘                                │
@@ -275,7 +294,8 @@ LIMIT 10;
  *
  * NEXT STEPS:
  * 1. Run 21_failover_groups_secondary.sql on SECONDARY account
- * 2. Run 30_cld_secondary_setup.sql to create CLD on secondary
- * 3. Verify replication is working
- * 4. Test failover procedure
+ * 2. Run 30_cld_secondary_setup.sql to create catalog integration AND CLD
+ * 3. Update AWS IAM trust policy with secondary account's IAM user ARNs
+ * 4. Verify replication is working
+ * 5. Test failover procedure
  ******************************************************************************/

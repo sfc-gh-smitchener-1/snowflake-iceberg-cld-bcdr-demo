@@ -21,17 +21,28 @@
  ******************************************************************************/
 
 -- ============================================================================
--- CONFIGURATION VARIABLES
--- Update these values for your environment
+-- CONFIGURATION
 -- ============================================================================
+/*
+ * BEFORE RUNNING: Update these account identifiers for your environment
+ *
+ * PRIMARY_ACCOUNT_FQN = '<YOUR_ORG>.<YOUR_PRIMARY_ACCOUNT>'
+ *
+ * Example: sfsenorthamerica.oab74379
+ *
+ * Find your account identifiers:
+ *   - Run: SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();
+ *   - Or check: SHOW ORGANIZATION ACCOUNTS;
+ *
+ * NOTE: SQL variables ($var) cannot be used in DDL statements.
+ *       You must use literal account names in CREATE FAILOVER GROUP statements.
+ */
 
-SET org_name = '<YOUR_ORG_NAME>';                       -- Your Snowflake organization name
-SET primary_account = '<YOUR_PRIMARY_ACCOUNT>';         -- Primary account locator
-SET secondary_account = '<YOUR_SECONDARY_ACCOUNT>';     -- Secondary account locator (this account)
-
--- Fully qualified account names
-SET primary_fqn = $org_name || '.' || $primary_account;
-SET secondary_fqn = $org_name || '.' || $secondary_account;
+-- Reference values (for verification only)
+-- Use ACCOUNT NAME, not account locator!
+SET org_name = 'SFSENORTHAMERICA';
+SET primary_account_name = 'SNOW_BCDR_PRIMARY';      -- Primary account NAME
+SET secondary_account_name = 'SNOW_BCDR_SECONDARY';  -- Secondary account NAME (this account)
 
 -- ============================================================================
 -- SECTION 1: Verify Current Account
@@ -54,8 +65,12 @@ SELECT CURRENT_ACCOUNT(), CURRENT_ORGANIZATION_NAME();
  * This creates replicas of roles and integrations on this account.
  */
 
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and primary ACCOUNT NAME (not locator!)             │
+-- │  Format: <ORG_NAME>.<ACCOUNT_NAME>.FAILOVER_GROUP_NAME                     │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_ACCOUNT_FG
-    AS REPLICA OF IDENTIFIER($primary_fqn || '.ICEBERG_BCDR_ACCOUNT_FG');
+    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_ACCOUNT_FG;
 
 -- Verify creation
 SHOW FAILOVER GROUPS;
@@ -68,8 +83,11 @@ SHOW FAILOVER GROUPS;
  * Create the secondary failover group for external volumes.
  */
 
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and primary ACCOUNT NAME (not locator!)             │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_VOLUME_FG
-    AS REPLICA OF IDENTIFIER($primary_fqn || '.ICEBERG_BCDR_VOLUME_FG');
+    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_VOLUME_FG;
 
 -- Verify creation
 SHOW FAILOVER GROUPS;
@@ -90,8 +108,11 @@ SHOW FAILOVER GROUPS;
  * ╚═══════════════════════════════════════════════════════════════════════════╝
  */
 
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  REPLACE with YOUR org and primary ACCOUNT NAME (not locator!)             │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_DB_FG
-    AS REPLICA OF IDENTIFIER($primary_fqn || '.ICEBERG_BCDR_DB_FG');
+    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_DB_FG;
 
 -- Verify all failover groups
 SHOW FAILOVER GROUPS;
@@ -139,21 +160,19 @@ SHOW EXTERNAL VOLUMES;
 -- SECTION 7: Check Replication Status
 -- ============================================================================
 
+-- View all failover groups
+SHOW FAILOVER GROUPS;
+
 -- View failover group details
 DESCRIBE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG;
 DESCRIBE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
 DESCRIBE FAILOVER GROUP ICEBERG_BCDR_DB_FG;
 
--- Check replication progress
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_ACCOUNT_FG'));
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_VOLUME_FG'));
-SELECT * FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_PROGRESS('ICEBERG_BCDR_DB_FG'));
-
--- View replication history
+-- View replication history (Account Usage - may have ~2hr latency)
 SELECT *
-FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUP_REFRESH_HISTORY())
+FROM SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_GROUP_REFRESH_HISTORY
 WHERE REPLICATION_GROUP_NAME LIKE 'ICEBERG_BCDR%'
-ORDER BY PHASE_START_TIME DESC
+ORDER BY START_TIME DESC
 LIMIT 20;
 
 -- ============================================================================
@@ -253,12 +272,8 @@ ALTER FAILOVER GROUP ICEBERG_BCDR_DB_FG PRIMARY;
  */
 
 -- Check that we are now primary
-SELECT 
-    REPLICATION_GROUP_NAME,
-    IS_PRIMARY,
-    ACCOUNT_NAME
-FROM TABLE(INFORMATION_SCHEMA.REPLICATION_GROUPS())
-WHERE REPLICATION_GROUP_NAME LIKE 'ICEBERG_BCDR%';
+SHOW FAILOVER GROUPS;
+-- Look for IS_PRIMARY = true in the results
 
 -- ============================================================================
 -- SECTION 13: Failback Procedure (Return to Normal Operations)

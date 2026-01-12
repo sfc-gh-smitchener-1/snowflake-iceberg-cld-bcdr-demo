@@ -76,13 +76,17 @@ This architecture actually provides benefits:
 | `scripts/00_prereqs_rbac.sql` | Role hierarchy, warehouse, and grants |
 | `scripts/01_aws_integrations.sql` | Storage integration, catalog integration, external volume |
 | `scripts/02_generate_iceberg_data.py` | Python script to generate sample advertising data |
-| `scripts/03_load_iceberg_aws.py` | Load data into S3 (legacy approach) |
-| `scripts/04_create_glue_iceberg_tables.py` | Create Iceberg tables in Glue using PyIceberg |
+| `scripts/03_load_iceberg_aws.py` | Load data into S3 and create Iceberg tables via PyIceberg |
+| `scripts/05_append_campaigns.py` | Append new campaigns to test Iceberg updates |
 | `scripts/10_external_tables.sql` | Create external Iceberg tables (traditional approach) |
 | `scripts/11_catalog_linked_database.sql` | Create Catalog Linked Database (modern approach) |
+| `scripts/12_materialized_views.sql` | Create materialized views over external tables |
+| `scripts/15_create_prod_database.sql` | Create PROD database with views over CLD |
+| `scripts/16_sync_task_primary.sql` | **Primary sync task** - auto-syncs EXT/CLD to PROD every 5 min |
 | `scripts/20_failover_groups_primary.sql` | Configure failover groups on primary account |
 | `scripts/21_failover_groups_secondary.sql` | Configure secondary account for replication |
 | `scripts/30_cld_secondary_setup.sql` | **Create CLD on secondary** (required - CLD not replicated) |
+| `scripts/31_sync_task_secondary.sql` | **Secondary heartbeat task** - audits grants, refreshes CLD |
 | `scripts/90_validation_queries.sql` | Queries to validate the setup |
 | `scripts/99_cleanup.sql` | Cleanup scripts |
 | `docs/ARCHITECTURE.md` | Detailed architecture documentation |
@@ -257,6 +261,47 @@ PRIMARY ACCOUNT                    SECONDARY ACCOUNT
 - No "promotion" needed for CLD during failover
 - Applications just switch to secondary account
 - Data immediately available
+
+### Automated Sync Tasks
+
+The demo includes automated sync tasks that run every 5 minutes:
+
+#### Primary Sync Task (`scripts/16_sync_task_primary.sql`)
+- Creates `TASK_WH` (XS Gen 2) for task processing
+- Python stored procedure `SYNC_PROD_DATABASE()`:
+  - Scans CLD for all tables → creates `SELECT *` views in PROD
+  - Scans EXT for views/materialized views → converts to CLD-backed views in PROD
+  - Logs all activity to `ICEBERG_PROD.MONITORING.SYNC_LOG`
+- Task runs every 5 minutes to keep PROD in sync
+
+#### Secondary Heartbeat Task (`scripts/31_sync_task_secondary.sql`)
+- Python stored procedure `SECONDARY_RESILIENT_HEARTBEAT()`:
+  - Refreshes CLD metadata (`ALTER DATABASE ICEBERG_DEMO_CLD REFRESH`)
+  - Audits and applies grants (database, schema, table, future grants)
+  - Validates CLD data accessibility
+  - Syncs CLD tables to PROD views
+  - Logs to `ICEBERG_PROD.DR_MONITORING.SECONDARY_HEARTBEAT_LOG`
+- Task runs every 5 minutes for resilient DR readiness
+
+```
+PRIMARY                                  SECONDARY
+┌─────────────────────────┐             ┌─────────────────────────┐
+│ ICEBERG_SYNC_TASK       │             │ SECONDARY_HEARTBEAT_TASK│
+│ (every 5 min)           │             │ (every 5 min)           │
+│                         │             │                         │
+│ • Sync CLD → PROD views │             │ • Refresh CLD metadata  │
+│ • Convert EXT views     │             │ • Audit & apply grants  │
+│ • Log to MONITORING     │             │ • Validate data access  │
+│                         │             │ • Sync CLD → PROD views │
+└─────────────────────────┘             └─────────────────────────┘
+         │                                        │
+         ▼                                        ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│ ICEBERG_PROD            │ ──────────► │ ICEBERG_PROD            │
+│ (replicated via FG)     │  Failover   │ (replica)               │
+│ • Views over CLD        │  Groups     │ • Views over CLD        │
+└─────────────────────────┘             └─────────────────────────┘
+```
 
 ## Troubleshooting
 

@@ -1,33 +1,31 @@
 /*******************************************************************************
  * ICEBERG CLD BCDR DEMO
  * Script: 30_cld_secondary_setup.sql
- * Purpose: Create Catalog Linked Database on SECONDARY account
+ * Purpose: Create Catalog Integration and CLD on SECONDARY account
  *
  * ╔═══════════════════════════════════════════════════════════════════════════╗
  * ║  WHY THIS SCRIPT IS REQUIRED:                                             ║
  * ║                                                                           ║
- * ║  Catalog Linked Databases (CLD) CANNOT be replicated via failover groups.║
- * ║  Each Snowflake account must create its own CLD independently.           ║
+ * ║  NEITHER Catalog Integrations NOR Catalog Linked Databases (CLD) can be  ║
+ * ║  replicated via failover groups. Each Snowflake account must create      ║
+ * ║  BOTH independently.                                                      ║
  * ║                                                                           ║
- * ║  Both CLDs point to the SAME Glue catalog and S3 storage, ensuring       ║
- * ║  data consistency across accounts without replication.                   ║
+ * ║  This script creates:                                                     ║
+ * ║  1. REST Catalog Integration (pointing to same Glue catalog)             ║
+ * ║  2. Catalog Linked Database (using that integration)                     ║
+ * ║                                                                           ║
+ * ║  Both accounts will access the SAME Glue catalog and S3 storage.         ║
  * ╚═══════════════════════════════════════════════════════════════════════════╝
  *
  * Prerequisites:
  *   - Failover groups configured and synced (scripts 20, 21)
- *   - Integrations replicated to secondary (REST_GLUE_CATALOG_INT)
+ *   - Storage integration replicated (AWS_ICEBERG_STORAGE_INT)
+ *   - External volume replicated (ICEBERG_EXT_VOLUME)
  *   - AWS IAM role trust policy includes BOTH accounts' Snowflake users
- *   - Lake Formation permissions configured (same as primary)
+ *   - Lake Formation "Allow external engines" enabled with full table access
  *
  * Run as: ACCOUNTADMIN (on SECONDARY account)
  ******************************************************************************/
-
--- ============================================================================
--- CONFIGURATION VARIABLES
--- These should match the primary account configuration
--- ============================================================================
-
-SET glue_database_name = 'iceberg_advertising_db';         -- Glue database name
 
 -- ============================================================================
 -- SECTION 1: Verify Secondary Account Setup
@@ -39,23 +37,57 @@ USE ROLE ACCOUNTADMIN;
 SELECT CURRENT_ACCOUNT(), CURRENT_ORGANIZATION_NAME();
 
 -- ============================================================================
--- SECTION 2: Verify Replicated Integrations
+-- SECTION 2: Create REST Catalog Integration (CANNOT BE REPLICATED!)
 -- ============================================================================
 
 /*
- * The REST catalog integration should have been replicated via failover groups.
- * Verify it exists before creating the CLD.
+ * ╔═══════════════════════════════════════════════════════════════════════════╗
+ * ║  CATALOG INTEGRATIONS CANNOT BE REPLICATED VIA FAILOVER GROUPS!           ║
+ * ║                                                                           ║
+ * ║  We must create a new catalog integration on this account that points    ║
+ * ║  to the SAME AWS Glue catalog as the primary account.                    ║
+ * ╚═══════════════════════════════════════════════════════════════════════════╝
+ *
+ * UPDATE these values to match your environment (same values as primary):
  */
 
--- Check if REST catalog integration was replicated
-SHOW CATALOG INTEGRATIONS;
-SHOW CATALOG INTEGRATIONS LIKE 'REST_GLUE%';
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  This must EXACTLY match the primary account's catalog integration config  │
+-- │  Update values below if your AWS setup is different                        │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 
--- Get details of the replicated integration
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  CRITICAL: Region must match PRIMARY's catalog integration!                │
+-- │  Check PRIMARY with: DESCRIBE CATALOG INTEGRATION REST_GLUE_CATALOG_INT;  │
+-- └─────────────────────────────────────────────────────────────────────────────┘
+CREATE OR REPLACE CATALOG INTEGRATION REST_GLUE_CATALOG_INT
+    CATALOG_SOURCE = ICEBERG_REST
+    TABLE_FORMAT = ICEBERG
+    CATALOG_NAMESPACE = 'iceberg_advertising_db'
+    REST_CONFIG = (
+        CATALOG_URI = 'https://glue.us-west-2.amazonaws.com/iceberg'
+        CATALOG_API_TYPE = AWS_GLUE
+        CATALOG_NAME = '703367008079'
+        ACCESS_DELEGATION_MODE = VENDED_CREDENTIALS
+    )
+    REST_AUTHENTICATION = (
+        TYPE = SIGV4
+        SIGV4_IAM_ROLE = 'arn:aws:iam::703367008079:role/SnowflakeS3_role'
+        SIGV4_SIGNING_REGION = 'us-west-2'
+    )
+    ENABLED = TRUE
+    COMMENT = 'REST Glue catalog integration on SECONDARY - same Glue catalog as PRIMARY';
+
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║  CRITICAL: After running the above, get the IAM user ARN and add to       ║
+-- ║  your AWS IAM role trust policy!                                          ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 DESCRIBE CATALOG INTEGRATION REST_GLUE_CATALOG_INT;
+-- Look for: SNOWFLAKE_SIGV4_IAM_USER_ARN - ADD this to your IAM role trust policy!
+-- The ARN will be different from PRIMARY account's ARN!
 
--- Note the API_AWS_IAM_USER_ARN - this MAY be different from primary!
--- If so, update your AWS IAM role trust policy to include BOTH user ARNs.
+-- Verify creation
+SHOW CATALOG INTEGRATIONS;
 
 -- ============================================================================
 -- SECTION 3: Verify External Volume
@@ -70,20 +102,31 @@ DESCRIBE EXTERNAL VOLUME ICEBERG_EXT_VOLUME;
 -- Note the STORAGE_AWS_IAM_USER_ARN - add to trust policy if different from primary
 
 -- ============================================================================
--- SECTION 4: Update AWS IAM Trust Policy (If Needed)
+-- SECTION 4: Update AWS IAM Trust Policy (REQUIRED!)
 -- ============================================================================
 
 /*
  * ╔═══════════════════════════════════════════════════════════════════════════╗
- * ║  CRITICAL: AWS IAM TRUST POLICY CONFIGURATION                             ║
+ * ║  CRITICAL: AWS IAM TRUST POLICY MUST INCLUDE SECONDARY ACCOUNT!           ║
  * ║                                                                           ║
- * ║  The IAM role must trust BOTH Snowflake accounts:                        ║
- * ║  - Primary account's Snowflake IAM user                                  ║
- * ║  - Secondary account's Snowflake IAM user (may be different!)           ║
+ * ║  After creating the catalog integration above, you MUST add the new      ║
+ * ║  SNOWFLAKE_SIGV4_IAM_USER_ARN to your AWS IAM role's trust policy.       ║
+ * ║                                                                           ║
+ * ║  The trust policy should include:                                        ║
+ * ║  - Primary account's catalog integration IAM user                        ║
+ * ║  - Secondary account's catalog integration IAM user (from above!)        ║
+ * ║  - Primary account's storage integration IAM user                        ║
+ * ║  - Secondary account's storage integration IAM user (check below)        ║
  * ║  - Lake Formation service principal                                      ║
  * ╚═══════════════════════════════════════════════════════════════════════════╝
- *
- * Example trust policy:
+ */
+
+-- Get the secondary account's storage integration IAM user ARN
+DESCRIBE STORAGE INTEGRATION AWS_ICEBERG_STORAGE_INT;
+-- Note: STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID
+
+/*
+ * Example trust policy (add to your IAM role in AWS Console):
  * {
  *   "Version": "2012-10-17",
  *   "Statement": [
@@ -91,8 +134,10 @@ DESCRIBE EXTERNAL VOLUME ICEBERG_EXT_VOLUME;
  *       "Effect": "Allow",
  *       "Principal": {
  *         "AWS": [
- *           "<PRIMARY_SNOWFLAKE_IAM_USER_ARN>",
- *           "<SECONDARY_SNOWFLAKE_IAM_USER_ARN>"
+ *           "<PRIMARY_CATALOG_SNOWFLAKE_IAM_USER_ARN>",
+ *           "<SECONDARY_CATALOG_SNOWFLAKE_IAM_USER_ARN>",
+ *           "<PRIMARY_STORAGE_SNOWFLAKE_IAM_USER_ARN>",
+ *           "<SECONDARY_STORAGE_SNOWFLAKE_IAM_USER_ARN>"
  *         ]
  *       },
  *       "Action": "sts:AssumeRole"
@@ -247,40 +292,47 @@ SELECT SYSTEM$CATALOG_LINK_STATUS('ICEBERG_DEMO_CLD');
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │                                                                         │
- * │   PRIMARY ACCOUNT              SECONDARY ACCOUNT                       │
- * │   ┌──────────────────┐        ┌──────────────────┐                    │
- * │   │ ICEBERG_DEMO_CLD │        │ ICEBERG_DEMO_CLD │                    │
- * │   │ (created in      │        │ (created in      │                    │
- * │   │  script 11)      │        │  THIS script)    │                    │
- * │   └────────┬─────────┘        └────────┬─────────┘                    │
- * │            │                           │                               │
- * │            │  REST_GLUE_CATALOG_INT    │  (replicated via failover)   │
- * │            │                           │                               │
- * │            └───────────┬───────────────┘                               │
- * │                        │                                               │
- * │            ┌───────────▼───────────┐                                   │
- * │            │   AWS LAKE FORMATION  │                                   │
- * │            │  (Credential Vending) │                                   │
- * │            └───────────┬───────────┘                                   │
- * │                        │                                               │
- * │            ┌───────────▼───────────┐                                   │
- * │            │    AWS GLUE CATALOG   │                                   │
- * │            │ iceberg_advertising_db │                                   │
- * │            └───────────┬───────────┘                                   │
- * │                        │                                               │
- * │            ┌───────────▼───────────┐                                   │
- * │            │      AMAZON S3        │                                   │
- * │            │ s3://bucket/iceberg/  │                                   │
- * │            └───────────────────────┘                                   │
+ * │   PRIMARY ACCOUNT                    SECONDARY ACCOUNT                 │
+ * │   ┌──────────────────┐              ┌──────────────────┐               │
+ * │   │ ICEBERG_DEMO_CLD │              │ ICEBERG_DEMO_CLD │               │
+ * │   │ (script 11)      │              │ (THIS script)    │               │
+ * │   └────────┬─────────┘              └────────┬─────────┘               │
+ * │            │                                  │                         │
+ * │   ┌────────▼─────────┐              ┌────────▼─────────┐               │
+ * │   │ REST_GLUE_       │              │ REST_GLUE_       │               │
+ * │   │ CATALOG_INT      │              │ CATALOG_INT      │               │
+ * │   │ (script 01)      │              │ (THIS script)    │               │
+ * │   └────────┬─────────┘              └────────┬─────────┘               │
+ * │            │                                  │                         │
+ * │            │   CANNOT BE REPLICATED!          │                         │
+ * │            │   (created independently)        │                         │
+ * │            │                                  │                         │
+ * │            └───────────────┬──────────────────┘                         │
+ * │                            │                                            │
+ * │            ┌───────────────▼───────────────┐                            │
+ * │            │     AWS LAKE FORMATION        │                            │
+ * │            │   (Credential Vending)        │                            │
+ * │            │  "Allow external engines"     │                            │
+ * │            └───────────────┬───────────────┘                            │
+ * │                            │                                            │
+ * │            ┌───────────────▼───────────────┐                            │
+ * │            │      AWS GLUE CATALOG         │                            │
+ * │            │    iceberg_advertising_db     │                            │
+ * │            └───────────────┬───────────────┘                            │
+ * │                            │                                            │
+ * │            ┌───────────────▼───────────────┐                            │
+ * │            │         AMAZON S3             │                            │
+ * │            │    s3://bucket/iceberg/       │                            │
+ * │            └───────────────────────────────┘                            │
  * │                                                                         │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * KEY POINTS:
  * 
  * 1. Each account has its OWN CLD (cannot be replicated)
- * 2. Both CLDs use the SAME replicated catalog integration
- * 3. Both CLDs connect to the SAME Glue catalog
- * 4. Both CLDs access the SAME S3 data
+ * 2. Each account has its OWN catalog integration (cannot be replicated!)
+ * 3. Both catalog integrations connect to the SAME Glue catalog
+ * 4. Both accounts access the SAME S3 data
  * 5. No data duplication - true shared storage pattern
  *
  * FAILOVER BEHAVIOR:
