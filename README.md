@@ -2,6 +2,17 @@
 
 Business Continuity and Disaster Recovery (BCDR) demonstration using Apache Iceberg tables managed by AWS Glue Catalog, integrated with Snowflake via both External Tables and Catalog Linked Database (CLD) approaches, with cross-account failover capabilities.
 
+⚠️ ATTENTION: Directional Guidance Only
+
+This repository is intended for demonstration and testing purposes only. Please be advised:
+
+Implementation Reality: The code and configurations provided are directionally correct but are not "plug-and-play."
+
+Environment Specifics: Successful execution will require manual navigation and configuration of your specific AWS S3 buckets and Snowflake environments (e.g., updating stage areas, storage integrations, and file paths).
+
+No Warranty: This is a test repository. There is no warranty, expressed or implied, regarding the accuracy, completeness, or performance of this code in a production setting.
+
+
 ## Architecture Overview
 
 ```
