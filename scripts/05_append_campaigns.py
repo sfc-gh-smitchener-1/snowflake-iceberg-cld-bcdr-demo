@@ -19,9 +19,11 @@ import click
 console = Console()
 fake = Faker()
 
-# Configuration
-BUCKET = "snowbcdrprimary"
-REGION = "us-west-2"
+# Configuration - UPDATE THESE VALUES for your environment
+# You can also set these via environment variables: AWS_S3_BUCKET, AWS_REGION
+import os
+BUCKET = os.environ.get("AWS_S3_BUCKET", "<YOUR_S3_BUCKET>")
+REGION = os.environ.get("AWS_REGION", "<YOUR_AWS_REGION>")
 GLUE_DATABASE = "iceberg_advertising_db"
 WAREHOUSE_PATH = f"s3://{BUCKET}/iceberg/warehouse"
 

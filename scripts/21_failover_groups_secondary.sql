@@ -28,7 +28,7 @@
  *
  * PRIMARY_ACCOUNT_FQN = '<YOUR_ORG>.<YOUR_PRIMARY_ACCOUNT>'
  *
- * Example: sfsenorthamerica.oab74379
+ * Example: MYORGNAME.MY_PRIMARY_ACCOUNT
  *
  * Find your account identifiers:
  *   - Run: SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();
@@ -40,9 +40,9 @@
 
 -- Reference values (for verification only)
 -- Use ACCOUNT NAME, not account locator!
-SET org_name = 'SFSENORTHAMERICA';
-SET primary_account_name = 'SNOW_BCDR_PRIMARY';      -- Primary account NAME
-SET secondary_account_name = 'SNOW_BCDR_SECONDARY';  -- Secondary account NAME (this account)
+SET org_name = '<YOUR_ORG_NAME>';                    -- e.g., 'MYORGNAME'
+SET primary_account_name = '<YOUR_PRIMARY_ACCOUNT>'; -- Primary account NAME
+SET secondary_account_name = '<YOUR_SECONDARY_ACCOUNT>'; -- Secondary account NAME (this account)
 
 -- ============================================================================
 -- SECTION 1: Verify Current Account
@@ -70,7 +70,8 @@ SELECT CURRENT_ACCOUNT(), CURRENT_ORGANIZATION_NAME();
 -- │  Format: <ORG_NAME>.<ACCOUNT_NAME>.FAILOVER_GROUP_NAME                     │
 -- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_ACCOUNT_FG
-    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_ACCOUNT_FG;
+    AS REPLICA OF <YOUR_ORG_NAME>.<YOUR_PRIMARY_ACCOUNT>.ICEBERG_BCDR_ACCOUNT_FG;
+    -- e.g., AS REPLICA OF MYORGNAME.MY_PRIMARY_ACCOUNT.ICEBERG_BCDR_ACCOUNT_FG;
 
 -- Verify creation
 SHOW FAILOVER GROUPS;
@@ -87,7 +88,8 @@ SHOW FAILOVER GROUPS;
 -- │  REPLACE with YOUR org and primary ACCOUNT NAME (not locator!)             │
 -- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_VOLUME_FG
-    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_VOLUME_FG;
+    AS REPLICA OF <YOUR_ORG_NAME>.<YOUR_PRIMARY_ACCOUNT>.ICEBERG_BCDR_VOLUME_FG;
+    -- e.g., AS REPLICA OF MYORGNAME.MY_PRIMARY_ACCOUNT.ICEBERG_BCDR_VOLUME_FG;
 
 -- Verify creation
 SHOW FAILOVER GROUPS;
@@ -112,7 +114,8 @@ SHOW FAILOVER GROUPS;
 -- │  REPLACE with YOUR org and primary ACCOUNT NAME (not locator!)             │
 -- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE FAILOVER GROUP IF NOT EXISTS ICEBERG_BCDR_DB_FG
-    AS REPLICA OF SFSENORTHAMERICA.SNOW_BCDR_PRIMARY.ICEBERG_BCDR_DB_FG;
+    AS REPLICA OF <YOUR_ORG_NAME>.<YOUR_PRIMARY_ACCOUNT>.ICEBERG_BCDR_DB_FG;
+    -- e.g., AS REPLICA OF MYORGNAME.MY_PRIMARY_ACCOUNT.ICEBERG_BCDR_DB_FG;
 
 -- Verify all failover groups
 SHOW FAILOVER GROUPS;

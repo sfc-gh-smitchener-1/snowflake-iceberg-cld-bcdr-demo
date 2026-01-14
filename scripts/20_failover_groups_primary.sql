@@ -33,7 +33,7 @@
  *
  * SECONDARY_ACCOUNT_FQN = '<YOUR_ORG>.<YOUR_SECONDARY_ACCOUNT>'
  *
- * Example: sfsenorthamerica.ozc55031
+ * Example: MYORGNAME.MY_SECONDARY_ACCOUNT
  *
  * Find your account identifiers:
  *   - Run: SELECT CURRENT_ORGANIZATION_NAME(), CURRENT_ACCOUNT_NAME();
@@ -45,9 +45,9 @@
 
 -- Reference values (for verification only, cannot be used in DDL)
 -- Use ACCOUNT NAME, not account locator!
-SET org_name = 'SFSENORTHAMERICA';
-SET primary_account_name = 'SNOW_BCDR_PRIMARY';      -- Primary account NAME (this account)
-SET secondary_account_name = 'SNOW_BCDR_SECONDARY';  -- Secondary account NAME
+SET org_name = '<YOUR_ORG_NAME>';                    -- e.g., 'MYORGNAME'
+SET primary_account_name = '<YOUR_PRIMARY_ACCOUNT>'; -- Primary account NAME (this account)
+SET secondary_account_name = '<YOUR_SECONDARY_ACCOUNT>'; -- Secondary account NAME
 
 -- ============================================================================
 -- SECTION 1: Verify Organization Setup
@@ -109,7 +109,7 @@ SHOW DATABASES LIKE 'ICEBERG_DEMO%';
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG
     OBJECT_TYPES = ROLES, INTEGRATIONS
     ALLOWED_INTEGRATION_TYPES = STORAGE INTEGRATIONS
-    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
+    ALLOWED_ACCOUNTS = <YOUR_ORG_NAME>.<YOUR_SECONDARY_ACCOUNT>  -- e.g., MYORGNAME.MY_SECONDARY_ACCOUNT
     REPLICATION_SCHEDULE = '10 MINUTE'
     COMMENT = 'Failover group for Iceberg BCDR - Account objects (roles, storage integrations)';
 
@@ -133,7 +133,7 @@ DESCRIBE FAILOVER GROUP ICEBERG_BCDR_ACCOUNT_FG;
 -- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG
     OBJECT_TYPES = EXTERNAL VOLUMES
-    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
+    ALLOWED_ACCOUNTS = <YOUR_ORG_NAME>.<YOUR_SECONDARY_ACCOUNT>  -- e.g., MYORGNAME.MY_SECONDARY_ACCOUNT
     REPLICATION_SCHEDULE = '10 MINUTE'
     COMMENT = 'Failover group for Iceberg BCDR - External Volumes';
 
@@ -167,7 +167,7 @@ DESCRIBE FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
 CREATE OR REPLACE FAILOVER GROUP ICEBERG_BCDR_DB_FG
     OBJECT_TYPES = DATABASES
     ALLOWED_DATABASES = ICEBERG_DEMO_EXT
-    ALLOWED_ACCOUNTS = SFSENORTHAMERICA.SNOW_BCDR_SECONDARY
+    ALLOWED_ACCOUNTS = <YOUR_ORG_NAME>.<YOUR_SECONDARY_ACCOUNT>  -- e.g., MYORGNAME.MY_SECONDARY_ACCOUNT
     REPLICATION_SCHEDULE = '10 MINUTE'
     COMMENT = 'Failover group for Iceberg BCDR - External Tables database only (CLD not supported)';
 

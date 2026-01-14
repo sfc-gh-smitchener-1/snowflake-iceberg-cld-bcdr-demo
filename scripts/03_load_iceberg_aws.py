@@ -18,11 +18,12 @@ Prerequisites:
 Usage:
     python 03_load_iceberg_aws.py \
         --data-dir ./data \
-        --bucket your-bucket-name \
+        --bucket <YOUR_S3_BUCKET> \
         --glue-database iceberg_advertising_db \
-        --region us-east-1
+        --region <YOUR_AWS_REGION>
 
-Author: Snowflake Demo Team
+Environment Variables (alternative to CLI args):
+    AWS_S3_BUCKET, AWS_REGION, AWS_GLUE_DATABASE
 """
 
 import os
@@ -281,8 +282,8 @@ def create_iceberg_table(
 @click.option(
     '--region', '-r',
     type=str,
-    default='us-east-1',
-    help='AWS region'
+    default=os.environ.get('AWS_REGION'),
+    help='AWS region (or set AWS_REGION env var)'
 )
 @click.option(
     '--s3-prefix', '-p',

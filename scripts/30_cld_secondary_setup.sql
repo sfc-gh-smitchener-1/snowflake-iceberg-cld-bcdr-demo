@@ -60,20 +60,23 @@ SELECT CURRENT_ACCOUNT(), CURRENT_ORGANIZATION_NAME();
 -- │  CRITICAL: Region must match PRIMARY's catalog integration!                │
 -- │  Check PRIMARY with: DESCRIBE CATALOG INTEGRATION REST_GLUE_CATALOG_INT;  │
 -- └─────────────────────────────────────────────────────────────────────────────┘
+-- ┌─────────────────────────────────────────────────────────────────────────────┐
+-- │  UPDATE THESE VALUES to match your AWS environment and PRIMARY config     │
+-- └─────────────────────────────────────────────────────────────────────────────┘
 CREATE OR REPLACE CATALOG INTEGRATION REST_GLUE_CATALOG_INT
     CATALOG_SOURCE = ICEBERG_REST
     TABLE_FORMAT = ICEBERG
     CATALOG_NAMESPACE = 'iceberg_advertising_db'
     REST_CONFIG = (
-        CATALOG_URI = 'https://glue.us-west-2.amazonaws.com/iceberg'
+        CATALOG_URI = 'https://glue.<YOUR_AWS_REGION>.amazonaws.com/iceberg'  -- e.g., us-west-2
         CATALOG_API_TYPE = AWS_GLUE
-        CATALOG_NAME = '703367008079'
+        CATALOG_NAME = '<YOUR_AWS_ACCOUNT_ID>'  -- e.g., 123456789012
         ACCESS_DELEGATION_MODE = VENDED_CREDENTIALS
     )
     REST_AUTHENTICATION = (
         TYPE = SIGV4
-        SIGV4_IAM_ROLE = 'arn:aws:iam::703367008079:role/SnowflakeS3_role'
-        SIGV4_SIGNING_REGION = 'us-west-2'
+        SIGV4_IAM_ROLE = 'arn:aws:iam::<YOUR_AWS_ACCOUNT_ID>:role/<YOUR_IAM_ROLE_NAME>'
+        SIGV4_SIGNING_REGION = '<YOUR_AWS_REGION>'  -- e.g., us-west-2
     )
     ENABLED = TRUE
     COMMENT = 'REST Glue catalog integration on SECONDARY - same Glue catalog as PRIMARY';
