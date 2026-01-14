@@ -352,9 +352,15 @@ ORDER BY total_budget DESC;
  *   └─────────────────────────────────────────────────────────────────┘
  *
  * BCDR NOTE:
- * - ICEBERG_PROD database CAN be included in failover groups
- * - Views are replicated along with the database
- * - On secondary, views will point to secondary's CLD (same Glue catalog)
+ * - ICEBERG_PROD is now INDEPENDENT on both accounts (NOT replicated)
+ * - This allows writable objects (tasks, procedures) on both accounts
+ * - Both ICEBERG_PROD databases have identical structure with views to local CLD
+ * - Schema drift is detected daily by script 33_schema_sync_task.sql
+ * - Migration to independent ICEBERG_PROD: script 32_migrate_prod_db_independent.sql
+ *
+ * NEXT STEPS FOR SECONDARY:
+ * 1. Run 32_migrate_prod_db_independent.sql to create independent ICEBERG_PROD
+ * 2. Run 33_schema_sync_task.sql to set up daily drift detection
  *
  ******************************************************************************/
 

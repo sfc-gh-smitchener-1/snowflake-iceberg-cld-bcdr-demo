@@ -3,9 +3,16 @@
 -- ============================================================================
 -- This script creates:
 -- 1. TASK_WH warehouse (XS Gen 2)
--- 2. Monitoring/logging table
--- 3. Python stored procedure for syncing EXT/CLD to PROD
+-- 2. Monitoring/logging tables
+-- 3. Python stored procedure for syncing CLD tables to PROD views
 -- 4. Task that runs every 5 minutes
+--
+-- ARCHITECTURE NOTE:
+-- ICEBERG_PROD is INDEPENDENT on both accounts (not replicated via FG).
+-- This script creates views in PROD that point to the local CLD.
+-- The secondary account has its own ICEBERG_PROD created via script 32.
+--
+-- RUN THIS ON: PRIMARY ACCOUNT
 -- ============================================================================
 
 -- ============================================================================

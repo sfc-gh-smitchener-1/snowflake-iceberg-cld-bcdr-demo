@@ -10,6 +10,14 @@ Implementation Reality: The code and configurations provided are directionally c
 
 Environment Specifics: Successful execution will require manual navigation and configuration of your specific AWS S3 buckets and Snowflake environments (e.g., updating stage areas, storage integrations, and file paths).
 
+This example has both Snowflake Catalog Linked Databases pointed to the same S3/Glue Iceberg tables in AWS US-WEST-2.  If they were to be duplicated to the failover region for full BC/DR purposes this would be a not trival task: 
+
+1. There is no way to get transaction consistency with S3 replication.
+2. They will have to manually update the absolute paths specified in the replicated metadata files.
+3. There is no way to guarantee in Glue secondary catalog that tables are read-only.
+4. There is no automated fail-over, no connection fail-over
+5. All applications, scripts will have to adapt and somehow learn that they need to talk to 2 different Glue catalogs during regular operation and during fail-over operations
+
 No Warranty: This is a test repository. There is no warranty, expressed or implied, regarding the accuracy, completeness, or performance of this code in a production setting.
 
 
@@ -36,24 +44,43 @@ No Warranty: This is a test repository. There is no warranty, expressed or impli
 │   │    SNOWFLAKE PRIMARY        │      │    SNOWFLAKE SECONDARY      │     │
 │   │                             │      │                             │     │
 │   │  ┌───────────────────────┐  │      │  ┌───────────────────────┐  │     │
-│   │  │ ICEBERG_DEMO_EXT      │  │      │  │ ICEBERG_DEMO_EXT      │  │     │
-│   │  │ (replicated via FG)   │──┼──────┼─►│ (replica)             │  │     │
+│   │  │ ICEBERG_PROD          │  │      │  │ ICEBERG_PROD          │  │     │
+│   │  │ (INDEPENDENT)         │  │      │  │ (INDEPENDENT)         │  │     │
+│   │  │ └─ views → CLD        │  │      │  │ └─ views → CLD        │  │     │
 │   │  └───────────────────────┘  │      │  └───────────────────────┘  │     │
-│   │                             │      │                             │     │
+│   │            │                │      │            │                │     │
+│   │            ▼                │      │            ▼                │     │
 │   │  ┌───────────────────────┐  │      │  ┌───────────────────────┐  │     │
 │   │  │ ICEBERG_DEMO_CLD      │  │      │  │ ICEBERG_DEMO_CLD      │  │     │
 │   │  │ (independent)         │──┼──┐   │  │ (independent)         │  │     │
 │   │  └───────────────────────┘  │  │   │  └───────────────────────┘  │     │
 │   │                             │  │   │              │              │     │
-│   └─────────────────────────────┘  │   └──────────────┼──────────────┘     │
-│                                    │                  │                     │
-│                                    │   ┌──────────────┘                     │
-│                                    │   │                                    │
-│                                    └───┴─► Both CLDs point to SAME         │
-│                                            Glue catalog (not replicated)   │
+│   │  ┌───────────────────────┐  │  │   │  ┌───────────────────────┐  │     │
+│   │  │ ICEBERG_DEMO_EXT      │  │  │   │  │ ICEBERG_DEMO_EXT      │  │     │
+│   │  │ (replicated via FG)   │──┼──┼───┼─►│ (replica, read-only)  │  │     │
+│   │  └───────────────────────┘  │  │   │  └───────────────────────┘  │     │
+│   └─────────────────────────────┘  │   └──────────────────────────────┘     │
+│                                    │                                        │
+│                                    └──► Both CLDs + ICEBERG_PROD point to  │
+│                                         SAME Glue catalog (shared data)    │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Key Architectural Decisions
+
+1. **ICEBERG_PROD is INDEPENDENT** on both accounts (not replicated)
+   - Both have identical views pointing to their local CLD
+   - Enables writable objects (tasks, procedures) on both accounts
+   - Schema drift detected daily via automated task
+
+2. **ICEBERG_DEMO_CLD is INDEPENDENT** (CLDs cannot be replicated)
+   - Both CLDs connect to the same AWS Glue catalog
+   - Data is shared via S3; no duplication
+
+3. **ICEBERG_DEMO_EXT is REPLICATED** via failover groups
+   - External tables replicated for backup/comparison
+   - Read-only on secondary until failover
 
 ## Key Concept: CLD Cannot Be Replicated
 
@@ -97,7 +124,9 @@ This architecture actually provides benefits:
 | `scripts/20_failover_groups_primary.sql` | Configure failover groups on primary account |
 | `scripts/21_failover_groups_secondary.sql` | Configure secondary account for replication |
 | `scripts/30_cld_secondary_setup.sql` | **Create CLD on secondary** (required - CLD not replicated) |
-| `scripts/31_sync_task_secondary.sql` | **Secondary heartbeat task** - audits grants, refreshes CLD |
+| `scripts/31_sync_task_secondary.sql` | **Secondary heartbeat task** - validates setup, audits grants |
+| `scripts/32_migrate_prod_db_independent.sql` | **ONE-TIME MIGRATION** - makes ICEBERG_PROD independent on both accounts |
+| `scripts/33_schema_sync_task.sql` | **Daily schema drift detection** - compares primary/secondary schemas |
 | `scripts/90_validation_queries.sql` | Queries to validate the setup |
 | `scripts/99_cleanup.sql` | Cleanup scripts |
 | `docs/ARCHITECTURE.md` | Detailed architecture documentation |
@@ -204,6 +233,26 @@ Run scripts in Snowsight:
 -- This step is REQUIRED because CLDs cannot be replicated via failover groups
 ```
 
+### Step 7: Migrate to Independent ICEBERG_PROD (ONE-TIME)
+
+```sql
+-- This migration makes ICEBERG_PROD independent on both accounts
+-- Run ONCE after initial setup
+
+-- On PRIMARY: Remove ICEBERG_PROD from failover group
+-- (scripts/32_migrate_prod_db_independent.sql - PART A)
+
+-- On SECONDARY: Create independent ICEBERG_PROD with views
+-- (scripts/32_migrate_prod_db_independent.sql - PART B)
+```
+
+### Step 8: Set Up Daily Schema Drift Detection
+
+```sql
+-- On SECONDARY: Create daily task to detect schema drift
+-- (scripts/33_schema_sync_task.sql)
+```
+
 ## Data Model
 
 ### Advertising Schema
@@ -241,9 +290,14 @@ Run scripts in Snowsight:
 
 | Failover Group | Contents | Notes |
 |----------------|----------|-------|
-| `ICEBERG_BCDR_ACCOUNT_FG` | Roles, Integrations | Includes REST_GLUE_CATALOG_INT |
+| `ICEBERG_BCDR_ACCOUNT_FG` | Roles, Integrations | Includes storage integrations |
 | `ICEBERG_BCDR_VOLUME_FG` | External Volumes | ICEBERG_EXT_VOLUME |
-| `ICEBERG_BCDR_DB_FG` | Databases | **Only ICEBERG_DEMO_EXT** (not CLD!) |
+| `ICEBERG_BCDR_DB_FG` | Databases | **Only ICEBERG_DEMO_EXT** (not CLD or PROD!) |
+
+**What's NOT Replicated (Independent on both accounts):**
+- `ICEBERG_DEMO_CLD` - CLDs cannot be replicated; both point to same Glue catalog
+- `ICEBERG_PROD` - Intentionally independent for writable objects (tasks, procedures)
+- `REST_GLUE_CATALOG_INT` - Catalog integrations cannot be replicated
 
 ### CLD BCDR Strategy
 
@@ -273,9 +327,9 @@ PRIMARY ACCOUNT                    SECONDARY ACCOUNT
 - Applications just switch to secondary account
 - Data immediately available
 
-### Automated Sync Tasks
+### Automated Tasks
 
-The demo includes automated sync tasks that run every 5 minutes:
+The demo includes automated tasks for monitoring and schema management:
 
 #### Primary Sync Task (`scripts/16_sync_task_primary.sql`)
 - Creates `TASK_WH` (XS Gen 2) for task processing
@@ -287,12 +341,19 @@ The demo includes automated sync tasks that run every 5 minutes:
 
 #### Secondary Heartbeat Task (`scripts/31_sync_task_secondary.sql`)
 - Python stored procedure `SECONDARY_RESILIENT_HEARTBEAT()`:
-  - Refreshes CLD metadata (`ALTER DATABASE ICEBERG_DEMO_CLD REFRESH`)
+  - Checks CLD link status via `SYSTEM$CATALOG_LINK_STATUS()`
   - Audits and applies grants (database, schema, table, future grants)
   - Validates CLD data accessibility
-  - Syncs CLD tables to PROD views
+  - **Validates** PROD views match CLD tables (no longer syncs - independent DBs)
+  - Resumes any suspended tasks
   - Logs to `ICEBERG_PROD.DR_MONITORING.SECONDARY_HEARTBEAT_LOG`
 - Task runs every 5 minutes for resilient DR readiness
+
+#### Daily Schema Drift Detection (`scripts/33_schema_sync_task.sql`)
+- Runs daily to detect schema drift between primary and secondary
+- Compares object definitions (views, procedures, tasks)
+- Logs drift to `ICEBERG_PROD.SCHEMA_SYNC.SCHEMA_DRIFT_LOG`
+- Reports missing objects and definition mismatches
 
 ```
 PRIMARY                                  SECONDARY
@@ -300,18 +361,31 @@ PRIMARY                                  SECONDARY
 │ ICEBERG_SYNC_TASK       │             │ SECONDARY_HEARTBEAT_TASK│
 │ (every 5 min)           │             │ (every 5 min)           │
 │                         │             │                         │
-│ • Sync CLD → PROD views │             │ • Refresh CLD metadata  │
+│ • Sync CLD → PROD views │             │ • Check CLD link status │
 │ • Convert EXT views     │             │ • Audit & apply grants  │
-│ • Log to MONITORING     │             │ • Validate data access  │
-│                         │             │ • Sync CLD → PROD views │
+│ • Log to MONITORING     │             │ • Validate PROD views   │
+│                         │             │ • Resume suspended tasks│
 └─────────────────────────┘             └─────────────────────────┘
          │                                        │
          ▼                                        ▼
 ┌─────────────────────────┐             ┌─────────────────────────┐
-│ ICEBERG_PROD            │ ──────────► │ ICEBERG_PROD            │
-│ (replicated via FG)     │  Failover   │ (replica)               │
-│ • Views over CLD        │  Groups     │ • Views over CLD        │
+│ ICEBERG_PROD            │             │ ICEBERG_PROD            │
+│ (INDEPENDENT)           │  ◄─drift─►  │ (INDEPENDENT)           │
+│ • Views over CLD        │  detection  │ • Views over CLD        │
 └─────────────────────────┘             └─────────────────────────┘
+         │                                        │
+         ▼                                        ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│ ICEBERG_DEMO_CLD        │             │ ICEBERG_DEMO_CLD        │
+│ (auto-sync from Glue)   │             │ (auto-sync from Glue)   │
+└───────────┬─────────────┘             └───────────┬─────────────┘
+            │                                       │
+            └───────────────┬───────────────────────┘
+                            ▼
+                   ┌────────────────┐
+                   │  AWS GLUE      │ ← Same catalog, same data
+                   │  CATALOG       │
+                   └────────────────┘
 ```
 
 ## Troubleshooting

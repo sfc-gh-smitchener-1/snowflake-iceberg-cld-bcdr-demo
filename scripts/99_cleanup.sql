@@ -4,12 +4,12 @@
  * Purpose: Remove all demo objects from the Snowflake account
  *
  * WARNING: This script will permanently delete:
- * - Databases (ICEBERG_DEMO_EXT, ICEBERG_DEMO_CLD)
+ * - Databases (ICEBERG_DEMO_EXT, ICEBERG_DEMO_CLD, ICEBERG_PROD)
  * - Roles (ICEBERG_ADMIN, ICEBERG_ENGINEER, ICEBERG_ANALYST)
- * - Integrations (AWS_ICEBERG_STORAGE_INT, GLUE_CATALOG_INT)
+ * - Integrations (AWS_ICEBERG_STORAGE_INT, REST_GLUE_CATALOG_INT)
  * - External volumes (ICEBERG_EXT_VOLUME)
- * - Failover groups (ICEBERG_BCDR_ACCOUNT_FG, ICEBERG_BCDR_DB_FG)
- * - Warehouse (ICEBERG_DEMO_WH)
+ * - Failover groups (ICEBERG_BCDR_ACCOUNT_FG, ICEBERG_BCDR_VOLUME_FG, ICEBERG_BCDR_DB_FG)
+ * - Warehouses (ICEBERG_DEMO_WH, TASK_WH)
  *
  * Note: This does NOT delete data from AWS S3 or Glue catalog.
  *
@@ -40,6 +40,9 @@ USE ROLE ACCOUNTADMIN;
 -- Drop database failover group
 DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_DB_FG;
 
+-- Drop external volume failover group
+DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_VOLUME_FG;
+
 -- Drop account failover group  
 DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_ACCOUNT_FG;
 
@@ -50,17 +53,20 @@ SHOW FAILOVER GROUPS LIKE 'ICEBERG_BCDR%';
 -- SECTION 2: Drop Databases
 -- ============================================================================
 
+-- Drop Production database (INDEPENDENT on both accounts)
+DROP DATABASE IF EXISTS ICEBERG_PROD;
+
 -- Drop External Tables database
 DROP DATABASE IF EXISTS ICEBERG_DEMO_EXT;
 
 -- Drop Catalog Linked Database
 DROP DATABASE IF EXISTS ICEBERG_DEMO_CLD;
 
--- Drop secondary CLD if it exists
+-- Drop secondary CLD if it exists (legacy naming)
 DROP DATABASE IF EXISTS ICEBERG_DEMO_CLD_SECONDARY;
 
 -- Verify
-SHOW DATABASES LIKE 'ICEBERG_DEMO%';
+SHOW DATABASES LIKE 'ICEBERG%';
 
 -- ============================================================================
 -- SECTION 3: Drop External Volume
@@ -81,30 +87,37 @@ SHOW EXTERNAL VOLUMES LIKE 'ICEBERG%';
 
 -- Drop storage integration
 DROP INTEGRATION IF EXISTS AWS_ICEBERG_STORAGE_INT;
+DROP INTEGRATION IF EXISTS ICEBERG_S3_INT;
 
--- Drop catalog integration
+-- Drop catalog integrations
+DROP INTEGRATION IF EXISTS REST_GLUE_CATALOG_INT;
 DROP INTEGRATION IF EXISTS GLUE_CATALOG_INT;
 
--- Drop secondary integrations if they exist
+-- Drop secondary integrations if they exist (legacy naming)
 DROP INTEGRATION IF EXISTS AWS_ICEBERG_STORAGE_INT_SECONDARY;
 DROP INTEGRATION IF EXISTS GLUE_CATALOG_INT_SECONDARY;
 
 -- Verify
 SHOW INTEGRATIONS LIKE '%ICEBERG%';
 SHOW INTEGRATIONS LIKE '%GLUE%';
+SHOW CATALOG INTEGRATIONS;
 
 -- ============================================================================
--- SECTION 5: Drop Warehouse
+-- SECTION 5: Drop Warehouses
 -- ============================================================================
 
 -- Drop primary warehouse
 DROP WAREHOUSE IF EXISTS ICEBERG_DEMO_WH;
 
+-- Drop task warehouse
+DROP WAREHOUSE IF EXISTS TASK_WH;
+
 -- Drop secondary warehouse if it exists
 DROP WAREHOUSE IF EXISTS ICEBERG_DEMO_WH_SECONDARY;
 
 -- Verify
-SHOW WAREHOUSES LIKE 'ICEBERG_DEMO%';
+SHOW WAREHOUSES LIKE 'ICEBERG%';
+SHOW WAREHOUSES LIKE 'TASK%';
 
 -- ============================================================================
 -- SECTION 6: Drop Roles
@@ -175,15 +188,21 @@ SHOW FAILOVER GROUPS LIKE 'ICEBERG%';
  * 
  * -- Drop replica failover groups
  * DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_DB_FG;
+ * DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_VOLUME_FG;
  * DROP FAILOVER GROUP IF EXISTS ICEBERG_BCDR_ACCOUNT_FG;
  * 
- * -- Drop secondary-specific databases
- * DROP DATABASE IF EXISTS ICEBERG_DEMO_CLD_SECONDARY;
+ * -- Drop INDEPENDENT databases (not replicated)
+ * DROP DATABASE IF EXISTS ICEBERG_PROD;
+ * DROP DATABASE IF EXISTS ICEBERG_DEMO_CLD;
  * 
- * -- Drop secondary warehouse
- * DROP WAREHOUSE IF EXISTS ICEBERG_DEMO_WH_SECONDARY;
+ * -- Drop secondary warehouses
+ * DROP WAREHOUSE IF EXISTS ICEBERG_DEMO_WH;
+ * DROP WAREHOUSE IF EXISTS TASK_WH;
  * 
- * -- Note: Replicated databases, roles, and integrations are automatically
+ * -- Drop catalog integration (not replicated)
+ * DROP INTEGRATION IF EXISTS REST_GLUE_CATALOG_INT;
+ * 
+ * -- Note: ICEBERG_DEMO_EXT, roles, and storage integrations are automatically
  * -- removed when the primary failover group is dropped.
  */
 

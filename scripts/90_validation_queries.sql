@@ -212,11 +212,29 @@ SHOW EXTERNAL VOLUMES IN FAILOVER GROUP ICEBERG_BCDR_VOLUME_FG;
 -- CLD link status (should show success or errors)
 SELECT SYSTEM$CATALOG_LINK_STATUS('ICEBERG_DEMO_CLD') AS cld_status;
 
--- Refresh CLD to ensure latest state from Glue
-ALTER DATABASE ICEBERG_DEMO_CLD REFRESH;
+-- ============================================================================
+-- SECTION 9B: ICEBERG_PROD Validation
+-- ============================================================================
 
--- Check status again
-SELECT SYSTEM$CATALOG_LINK_STATUS('ICEBERG_DEMO_CLD') AS cld_status_after_refresh;
+-- ICEBERG_PROD is INDEPENDENT on both accounts (not replicated)
+-- Verify it exists and has the expected structure
+
+SHOW DATABASES LIKE 'ICEBERG_PROD';
+SHOW SCHEMAS IN DATABASE ICEBERG_PROD;
+SHOW VIEWS IN SCHEMA ICEBERG_PROD.ADVERTISING;
+
+-- Verify views point to CLD and work correctly
+SELECT 'PROD.CAMPAIGNS' AS view_name, COUNT(*) AS row_count 
+FROM ICEBERG_PROD.ADVERTISING.CAMPAIGNS
+UNION ALL SELECT 'PROD.IMPRESSIONS', COUNT(*) FROM ICEBERG_PROD.ADVERTISING.IMPRESSIONS
+UNION ALL SELECT 'PROD.CLICKS', COUNT(*) FROM ICEBERG_PROD.ADVERTISING.CLICKS
+UNION ALL SELECT 'PROD.CONVERSIONS', COUNT(*) FROM ICEBERG_PROD.ADVERTISING.CONVERSIONS;
+
+-- Check schema drift log (if schema sync task is set up)
+SELECT * FROM ICEBERG_PROD.SCHEMA_SYNC.SCHEMA_DRIFT_LOG
+WHERE status = 'DETECTED'
+ORDER BY check_timestamp DESC
+LIMIT 10;
 
 -- ============================================================================
 -- SECTION 10: Access Control Validation
@@ -250,8 +268,9 @@ UNION ALL SELECT '  Catalog Integration:  REST_GLUE_CATALOG_INT'
 UNION ALL SELECT '  External Volume:      ICEBERG_EXT_VOLUME'
 UNION ALL SELECT ''
 UNION ALL SELECT '▸ DATABASES'
-UNION ALL SELECT '  External Tables:      ICEBERG_DEMO_EXT.ADVERTISING.* (✓ Replicated)'
-UNION ALL SELECT '  Catalog Linked DB:    ICEBERG_DEMO_CLD.ICEBERG_ADVERTISING_DB.* (✗ NOT replicated)'
+UNION ALL SELECT '  External Tables:      ICEBERG_DEMO_EXT.ADVERTISING.* (✓ Replicated, read-only on secondary)'
+UNION ALL SELECT '  Catalog Linked DB:    ICEBERG_DEMO_CLD.ICEBERG_ADVERTISING_DB.* (✗ Independent, same Glue)'
+UNION ALL SELECT '  Production DB:        ICEBERG_PROD.ADVERTISING.* (✗ Independent, identical structure)'
 UNION ALL SELECT ''
 UNION ALL SELECT '▸ FAILOVER GROUPS'
 UNION ALL SELECT '  ICEBERG_BCDR_ACCOUNT_FG:  Roles, Integrations'
@@ -296,10 +315,19 @@ SELECT
  * □ Tables synced from Glue catalog
  * □ Data matches External Tables
  *
+ * PRODUCTION DATABASE (ICEBERG_PROD):
+ * □ Database exists (INDEPENDENT on both accounts)
+ * □ ADVERTISING schema with views (CAMPAIGNS, IMPRESSIONS, etc.)
+ * □ Views point to local CLD and return data
+ * □ Aggregation views working (V_CAMPAIGN_PERFORMANCE, etc.)
+ * □ MONITORING schema exists (primary)
+ * □ DR_MONITORING schema exists (secondary)
+ * □ SCHEMA_SYNC schema exists (for drift detection)
+ *
  * FAILOVER GROUPS:
  * □ ICEBERG_BCDR_ACCOUNT_FG (roles, integrations)
  * □ ICEBERG_BCDR_VOLUME_FG (external volumes)
- * □ ICEBERG_BCDR_DB_FG (ICEBERG_DEMO_EXT only - CLD NOT included)
+ * □ ICEBERG_BCDR_DB_FG (ICEBERG_DEMO_EXT only - CLD and PROD NOT included)
  * □ Replication running (if secondary configured)
  *
  * AWS REQUIREMENTS FOR CLD:
@@ -311,7 +339,10 @@ SELECT
  * □ Lake Formation: Data permissions granted to IAM role
  *
  * SECONDARY ACCOUNT SPECIFIC:
- * □ Replica failover groups created
+ * □ Replica failover groups created (script 21)
  * □ CLD created independently (script 30)
+ * □ ICEBERG_PROD created independently (script 32)
+ * □ Schema sync task running daily (script 33)
+ * □ Heartbeat task running every 5 min (script 31)
  * □ IAM trust policy includes secondary's Snowflake IAM user ARN
  ******************************************************************************/

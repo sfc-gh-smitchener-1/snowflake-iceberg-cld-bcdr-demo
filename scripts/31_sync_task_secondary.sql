@@ -1,21 +1,25 @@
 -- ============================================================================
--- ICEBERG BCDR DEMO: Secondary Sync Task (Resilient Heartbeat)
+-- ICEBERG BCDR DEMO: Secondary Heartbeat Task (Validation & Monitoring)
 -- ============================================================================
 -- This script creates:
 -- 1. TASK_WH warehouse (XS Gen 2) on secondary
--- 2. ICEBERG_PROD database (if not exists) for views over CLD tables
--- 3. Monitoring/logging tables
--- 4. Python stored procedure for secondary health checks
--- 5. Task that runs every 5 minutes
+-- 2. Monitoring/logging tables in ICEBERG_PROD.DR_MONITORING
+-- 3. Python stored procedure for secondary health checks
+-- 4. Task that runs every 5 minutes
+-- 
+-- ARCHITECTURE (Post-Migration):
+-- - ICEBERG_PROD is now INDEPENDENT on both primary and secondary
+-- - Both ICEBERG_PROD databases have identical views pointing to their local CLD
+-- - Both CLDs connect to the same AWS Glue catalog (shared data)
+-- - This task VALIDATES (not syncs) that the setup is working correctly
 -- 
 -- IMPORTANT NOTES:
--- - CLDs (Catalog Linked Databases) do NOT use 'ALTER DATABASE ... REFRESH'
---   like replicated databases. Instead, CLDs auto-sync from the external
---   catalog (AWS Glue). We use SYSTEM$CATALOG_LINK_STATUS() to check status.
--- - ICEBERG_PROD database is NOT replicated via failover groups; we create
---   it locally on secondary with views pointing to CLD tables.
+-- - CLDs auto-sync from AWS Glue; we use SYSTEM$CATALOG_LINK_STATUS() to check
+-- - ICEBERG_PROD was created via migration script 32 (independent database)
+-- - Schema drift detection is handled by the daily task (script 33)
 -- 
--- RUN THIS ON: SECONDARY ACCOUNT (OZC55031)
+-- RUN THIS ON: SECONDARY ACCOUNT
+-- PREREQUISITE: Run migration script 32 first to create independent ICEBERG_PROD
 -- ============================================================================
 
 -- ============================================================================
@@ -45,11 +49,8 @@ GRANT OPERATE ON WAREHOUSE TASK_WH TO ROLE ICEBERG_ADMIN;
 USE ROLE ICEBERG_ADMIN;
 USE WAREHOUSE TASK_WH;
 
--- IMPORTANT: ICEBERG_PROD may NOT be replicated from primary.
--- On secondary, we create it locally to hold views over CLD tables.
-CREATE DATABASE IF NOT EXISTS ICEBERG_PROD
-    COMMENT = 'Production database with views over Iceberg CLD tables (secondary)';
-
+-- ICEBERG_PROD should already exist from migration script 32
+-- If it doesn't exist, run 32_migrate_prod_db_independent.sql first
 USE DATABASE ICEBERG_PROD;
 
 -- Create DR-specific monitoring schema if needed
@@ -303,20 +304,26 @@ def validate_cld_data(session):
     
     return results
 
-def ensure_prod_database(session):
-    """Ensure ICEBERG_PROD database exists on secondary.
+def validate_prod_database(session):
+    """Validate that ICEBERG_PROD database exists and is accessible.
     
-    NOTE: ICEBERG_PROD may not be replicated via failover groups.
-    On secondary, we create it locally to hold views over CLD tables.
+    NOTE: ICEBERG_PROD should have been created via migration script 32.
+    This function validates it exists, not creates it.
     """
     try:
-        session.sql("""
-            CREATE DATABASE IF NOT EXISTS ICEBERG_PROD
-            COMMENT = 'Production database with views over Iceberg CLD tables (secondary)'
+        result = session.sql("""
+            SELECT COUNT(*) as cnt 
+            FROM ICEBERG_PROD.INFORMATION_SCHEMA.SCHEMATA
+            WHERE schema_name != 'INFORMATION_SCHEMA'
         """).collect()
-        return True, "ICEBERG_PROD database ensured"
+        schema_count = result[0]['CNT'] if result else 0
+        
+        if schema_count > 0:
+            return True, f"ICEBERG_PROD exists with {schema_count} schemas"
+        else:
+            return False, "ICEBERG_PROD exists but has no schemas - run migration script 32"
     except Exception as e:
-        return False, str(e)
+        return False, f"ICEBERG_PROD not accessible: {str(e)}"
 
 def resume_suspended_tasks(session):
     """Resume all suspended tasks that were replicated from primary.
@@ -368,52 +375,79 @@ def resume_suspended_tasks(session):
         'details': results
     }
 
-def sync_cld_tables_to_prod(session):
-    """Ensure PROD views exist for all CLD tables"""
+def validate_prod_views(session):
+    """Validate that ICEBERG_PROD views exist and match CLD tables.
+    
+    This function VALIDATES (not syncs) that the independent ICEBERG_PROD 
+    database has views corresponding to CLD tables. If views are missing,
+    it reports the gap but does NOT create them (use migration script 32).
+    """
     try:
-        # First, ensure ICEBERG_PROD database exists
-        db_ok, db_msg = ensure_prod_database(session)
+        # First, validate ICEBERG_PROD database exists
+        db_ok, db_msg = validate_prod_database(session)
         if not db_ok:
-            return 0, 0
+            return {
+                'status': 'FAILED',
+                'message': db_msg,
+                'cld_tables': 0,
+                'prod_views': 0,
+                'missing': []
+            }
         
-        # Get CLD tables (using ICEBERG TABLES for CLD, not regular TABLES)
+        # Get CLD table count
         try:
-            cld_tables = session.sql("""
-                SELECT table_name, table_schema 
+            cld_result = session.sql("""
+                SELECT table_schema, table_name 
                 FROM ICEBERG_DEMO_CLD.INFORMATION_SCHEMA.TABLES 
                 WHERE table_schema != 'INFORMATION_SCHEMA'
                 AND table_type = 'BASE TABLE'
             """).collect()
+            cld_tables = [(r['TABLE_SCHEMA'], r['TABLE_NAME']) for r in cld_result]
         except:
-            # Try alternative query for Iceberg tables
-            cld_tables = session.sql("""
-                SELECT table_name, table_schema 
-                FROM TABLE(ICEBERG_DEMO_CLD.INFORMATION_SCHEMA.ICEBERG_TABLES())
-                WHERE table_schema != 'INFORMATION_SCHEMA'
+            cld_tables = []
+        
+        # Get PROD view count (in ADVERTISING schema specifically)
+        try:
+            prod_result = session.sql("""
+                SELECT table_schema, table_name 
+                FROM ICEBERG_PROD.INFORMATION_SCHEMA.VIEWS 
+                WHERE table_schema NOT IN ('INFORMATION_SCHEMA', 'DR_MONITORING', 'SCHEMA_SYNC', 'MONITORING')
             """).collect()
+            prod_views = [(r['TABLE_SCHEMA'], r['TABLE_NAME']) for r in prod_result]
+        except:
+            prod_views = []
         
-        synced = 0
-        for row in cld_tables:
-            table_name = row['TABLE_NAME']
-            schema_name = row['TABLE_SCHEMA']
-            
-            try:
-                # Ensure schema exists
-                session.sql(f"CREATE SCHEMA IF NOT EXISTS ICEBERG_PROD.{schema_name}").collect()
-                
-                # Create or replace view
-                session.sql(f"""
-                    CREATE OR REPLACE VIEW ICEBERG_PROD.{schema_name}.{table_name}
-                    COMMENT = 'Secondary-synced view from CLD: ICEBERG_DEMO_CLD.{schema_name}.{table_name}'
-                    AS SELECT * FROM ICEBERG_DEMO_CLD.{schema_name}.{table_name}
-                """).collect()
-                synced += 1
-            except:
-                pass
+        # Find CLD tables without corresponding PROD views
+        # Note: Schema names may differ (ICEBERG_ADVERTISING_DB -> ADVERTISING)
+        cld_table_names = set(t[1].upper() for t in cld_tables)
+        prod_view_names = set(v[1].upper() for v in prod_views)
         
-        return synced, len(cld_tables)
-    except:
-        return 0, 0
+        # Core tables that should have views
+        core_tables = {'CAMPAIGNS', 'IMPRESSIONS', 'CLICKS', 'CONVERSIONS'}
+        missing_core = core_tables - prod_view_names
+        
+        if len(missing_core) == 0:
+            status = 'SUCCESS'
+            message = f"All core tables have views. CLD: {len(cld_tables)}, PROD views: {len(prod_views)}"
+        else:
+            status = 'WARNING'
+            message = f"Missing views for core tables: {list(missing_core)}"
+        
+        return {
+            'status': status,
+            'message': message,
+            'cld_tables': len(cld_tables),
+            'prod_views': len(prod_views),
+            'missing_core_views': list(missing_core) if missing_core else []
+        }
+    except Exception as e:
+        return {
+            'status': 'ERROR',
+            'message': str(e),
+            'cld_tables': 0,
+            'prod_views': 0,
+            'missing_core_views': []
+        }
 
 def main(session: snowpark.Session) -> dict:
     """Main secondary heartbeat procedure"""
@@ -455,9 +489,9 @@ def main(session: snowpark.Session) -> dict:
         results['checks']['data_validation'] = data_validation
         total_rows = sum(count for _, count, _ in data_validation if isinstance(count, int))
         
-        # 7. Sync CLD tables to PROD views
-        synced, total = sync_cld_tables_to_prod(session)
-        results['checks']['cld_to_prod_sync'] = {'synced': synced, 'total': total}
+        # 7. Validate PROD views match CLD tables (no sync - independent DBs)
+        prod_validation = validate_prod_views(session)
+        results['checks']['prod_validation'] = prod_validation
         
         # 8. Resume any suspended tasks (replicated tasks come over suspended)
         task_results = resume_suspended_tasks(session)

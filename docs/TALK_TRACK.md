@@ -218,9 +218,34 @@ Iceberg CLD DR:
 
 ---
 
-## Part 9: Comparison Summary (2 minutes)
+## Part 9: ICEBERG_PROD Architecture (3 minutes)
 
-> "Let me summarize the two approaches we showed:"
+> "Let me explain the production architecture we use:"
+
+### Show PROD Views
+
+```sql
+USE DATABASE ICEBERG_PROD;
+SHOW VIEWS IN SCHEMA ADVERTISING;
+
+SELECT * FROM ADVERTISING.V_CAMPAIGN_PERFORMANCE LIMIT 5;
+```
+
+> "ICEBERG_PROD provides an abstraction layer. Applications connect here, not directly to CLD. This gives us flexibility and a consistent namespace across accounts."
+
+### Key Architecture Points
+
+| Database | Purpose | Replication |
+|----------|---------|-------------|
+| `ICEBERG_DEMO_EXT` | External tables | ✓ Replicated (read-only on secondary) |
+| `ICEBERG_DEMO_CLD` | Catalog linked to Glue | ✗ Independent (same Glue catalog) |
+| `ICEBERG_PROD` | Application views | ✗ Independent (identical structure) |
+
+> "Both accounts have their own ICEBERG_PROD with the same views. Applications can switch between accounts seamlessly."
+
+## Part 10: Comparison Summary (2 minutes)
+
+> "Let me summarize the approaches:"
 
 | Feature | External Tables | Catalog Linked Database |
 |---------|-----------------|------------------------|
@@ -229,7 +254,7 @@ Iceberg CLD DR:
 | Control | Full control | Catalog-driven |
 | Best For | Stable schemas | Dynamic environments |
 
-> "Most customers use CLD for active development and EXT for production workloads where schema stability is critical."
+> "Most customers use CLD for the application layer via ICEBERG_PROD views."
 
 ---
 
@@ -257,11 +282,13 @@ Iceberg CLD DR:
 
 1. ✅ Iceberg tables managed by AWS Glue
 2. ✅ Dual access patterns: External Tables and CLD
-3. ✅ Role-based access control aligned to your organization
-4. ✅ Zero-copy disaster recovery with failover groups
-5. ✅ Secondary account ready for instant promotion
+3. ✅ ICEBERG_PROD abstraction layer for applications
+4. ✅ Role-based access control aligned to your organization
+5. ✅ Zero-copy disaster recovery with failover groups
+6. ✅ Independent ICEBERG_PROD on both accounts (identical namespace)
+7. ✅ Daily schema drift detection for consistency
 
-> "The result is a data lakehouse architecture with enterprise-grade reliability, without the traditional cost and complexity of DR."
+> "The result is a data lakehouse architecture with enterprise-grade reliability, without the traditional cost and complexity of DR. Applications connect to ICEBERG_PROD and can seamlessly switch between primary and secondary."
 
 ### Call to Action
 

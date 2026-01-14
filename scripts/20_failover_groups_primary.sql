@@ -296,6 +296,9 @@ LIMIT 10;
  * 1. Run 21_failover_groups_secondary.sql on SECONDARY account
  * 2. Run 30_cld_secondary_setup.sql to create catalog integration AND CLD
  * 3. Update AWS IAM trust policy with secondary account's IAM user ARNs
- * 4. Verify replication is working
- * 5. Test failover procedure
+ * 4. Run 32_migrate_prod_db_independent.sql to create independent ICEBERG_PROD
+ * 5. Run 33_schema_sync_task.sql to set up daily schema drift detection
+ * 6. Run 31_sync_task_secondary.sql to set up heartbeat validation task
+ * 7. Verify replication is working
+ * 8. Test failover procedure
  ******************************************************************************/

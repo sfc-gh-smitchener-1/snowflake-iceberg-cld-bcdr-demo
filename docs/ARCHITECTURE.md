@@ -166,8 +166,9 @@ Each Snowflake account must create its own CLD independently, but both CLDs poin
 
 | Database | Replication | Notes |
 |----------|-------------|-------|
-| `ICEBERG_DEMO_EXT` | ✓ Replicated via failover group | External Tables approach |
-| `ICEBERG_DEMO_CLD` | ✗ **NOT REPLICATED** | Created independently on each account |
+| `ICEBERG_DEMO_EXT` | ✓ Replicated via failover group | External Tables approach (read-only on secondary) |
+| `ICEBERG_DEMO_CLD` | ✗ **NOT REPLICATED** | Created independently on each account, points to same Glue catalog |
+| `ICEBERG_PROD` | ✗ **NOT REPLICATED** | Independent on both accounts, contains views over CLD |
 
 #### Role Hierarchy (Replicated)
 
@@ -193,9 +194,64 @@ ACCOUNTADMIN
 
 | Failover Group | Object Types | Contents |
 |----------------|--------------|----------|
-| `ICEBERG_BCDR_ACCOUNT_FG` | ROLES, INTEGRATIONS | ICEBERG_ADMIN, ICEBERG_ENGINEER, ICEBERG_ANALYST, AWS_ICEBERG_STORAGE_INT, REST_GLUE_CATALOG_INT |
+| `ICEBERG_BCDR_ACCOUNT_FG` | ROLES, INTEGRATIONS | ICEBERG_ADMIN, ICEBERG_ENGINEER, ICEBERG_ANALYST, AWS_ICEBERG_STORAGE_INT |
 | `ICEBERG_BCDR_VOLUME_FG` | EXTERNAL VOLUMES | ICEBERG_EXT_VOLUME |
-| `ICEBERG_BCDR_DB_FG` | DATABASES | **ICEBERG_DEMO_EXT only** (CLD not supported) |
+| `ICEBERG_BCDR_DB_FG` | DATABASES | **ICEBERG_DEMO_EXT only** (CLD and PROD not included) |
+
+### Independent Databases (NOT Replicated)
+
+| Database | Why Independent | Sync Mechanism |
+|----------|-----------------|----------------|
+| `ICEBERG_DEMO_CLD` | CLDs cannot be replicated | Both point to same Glue catalog |
+| `ICEBERG_PROD` | Needs to be writable on both | Daily schema drift detection task |
+| `REST_GLUE_CATALOG_INT` | Catalog integrations cannot be replicated | Created independently on each account |
+
+## ICEBERG_PROD Architecture
+
+ICEBERG_PROD is the application-facing database containing views over CLD tables. It is **independent on both accounts** for these reasons:
+
+1. **Writable on both**: Tasks, procedures, and monitoring tables need to be writable
+2. **Identical namespace**: Applications use the same database name regardless of account
+3. **Consistent structure**: Both have the same views, pointing to their local CLD
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ICEBERG_PROD ARCHITECTURE                                                  │
+│                                                                             │
+│  PRIMARY ACCOUNT                      SECONDARY ACCOUNT                     │
+│  ┌──────────────────────────┐        ┌──────────────────────────┐          │
+│  │ ICEBERG_PROD             │        │ ICEBERG_PROD             │          │
+│  │ (INDEPENDENT, writable)  │        │ (INDEPENDENT, writable)  │          │
+│  │                          │        │                          │          │
+│  │ ├─ ADVERTISING           │        │ ├─ ADVERTISING           │          │
+│  │ │  ├─ CAMPAIGNS (view)   │        │ │  ├─ CAMPAIGNS (view)   │          │
+│  │ │  ├─ IMPRESSIONS (view) │        │ │  ├─ IMPRESSIONS (view) │          │
+│  │ │  └─ V_CAMPAIGN_PERF    │        │ │  └─ V_CAMPAIGN_PERF    │          │
+│  │ │                        │        │ │                        │          │
+│  │ ├─ MONITORING            │        │ ├─ DR_MONITORING         │          │
+│  │ │  └─ SYNC_LOG           │        │ │  └─ HEARTBEAT_LOG      │          │
+│  │ │                        │        │ │                        │          │
+│  │ └─ SCHEMA_SYNC           │        │ └─ SCHEMA_SYNC           │          │
+│  │    └─ SCHEMA_METADATA    │        │    └─ SCHEMA_DRIFT_LOG   │          │
+│  └────────────┬─────────────┘        └────────────┬─────────────┘          │
+│               │                                   │                         │
+│               ▼                                   ▼                         │
+│  ┌──────────────────────────┐        ┌──────────────────────────┐          │
+│  │ ICEBERG_DEMO_CLD         │        │ ICEBERG_DEMO_CLD         │          │
+│  │ (points to Glue)         │        │ (points to same Glue)    │          │
+│  └──────────────────────────┘        └──────────────────────────┘          │
+│                                                                             │
+│  SCHEMA DRIFT DETECTION: Daily task compares object definitions            │
+│  between accounts and logs any drift to SCHEMA_DRIFT_LOG                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Migration to Independent ICEBERG_PROD
+
+Script `32_migrate_prod_db_independent.sql` handles the one-time migration:
+1. Remove ICEBERG_PROD from failover group (if it was included)
+2. Create independent ICEBERG_PROD on secondary
+3. Create all views pointing to local CLD
 
 ## CLD BCDR Strategy
 
@@ -239,10 +295,16 @@ Since CLDs cannot be replicated, we use a **shared catalog** strategy:
 |-----------|-----------------|-----------------|
 | External Tables DB | Promote failover group | `ALTER FAILOVER GROUP ... PRIMARY` |
 | CLD | Already working | None - already connected to Glue |
+| ICEBERG_PROD | Already working | None - independent database with views to CLD |
 | Integrations | Promote failover group | `ALTER FAILOVER GROUP ... PRIMARY` |
 | External Volume | Promote failover group | `ALTER FAILOVER GROUP ... PRIMARY` |
+| Tasks | Resume after failover | Secondary heartbeat auto-resumes suspended tasks |
 
-**Key Insight**: The CLD on secondary is **already operational** because it's independently connected to the same Glue catalog. During failover, applications simply redirect to the secondary account - the CLD is ready immediately.
+**Key Insight**: Both CLD and ICEBERG_PROD on secondary are **already operational** because:
+- CLD is independently connected to the same Glue catalog
+- ICEBERG_PROD contains views that point to the local CLD
+- During failover, applications simply redirect to the secondary account
+- Data is immediately available with no recovery time for CLD/PROD workloads
 
 ## Data Flow
 
